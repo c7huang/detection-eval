@@ -220,8 +220,10 @@ class KITTIFilter(DetectionFilter):
 
     def get_ignored_gt(self, gt):
         # Ignored boxes will not be counted towards FP if detected or FN if not detected
-        frame_id = gt['frame_id']
-        names = gt['gt_names']
+        # frame_id = gt['frame_id']
+        # names = gt['gt_names']
+        frame_id = gt['image']['image_idx']
+        names = gt['annos']['name']
 
         ignored = np.zeros(len(names), dtype=bool)
         for idx, name in enumerate(names):
@@ -248,8 +250,27 @@ class KITTIFilter(DetectionFilter):
     def get_discarded_gt(self, gt):
         # Discarded boxes will not be counted towards FN if not detected,
         # but will be counted as FP if detected
-        labels = gt['gt_labels']
-        return (labels != self.class_label)
+        # labels = gt['gt_labels']
+        classes = dict(
+            Car=1, Pedestrian=2, Cyclist=3,
+            Truck=-1, Misc=-1, Van=-1, Tram=-1, Person_sitting=-1,
+            DontCare=-1
+        )
+        labels = []
+        for name in gt['annos']['name']:
+            if name == 'DontCare':
+                continue
+            labels.append(classes[name])
+        # print('gt', gt)
+        # print("gt['annos']['name']", gt['annos']['name'])
+        # print('self.class_label', self.class_label)
+        # print('labels', labels)
+        # exit()
+        ret = []
+        for label in labels:
+            ret.append(label != self.class_label)
+        return ret
+        # return (labels != self.class_label)
 
     def get_discarded_pred(self, pred):
         # Discarded prediction will not be regarded as positive
