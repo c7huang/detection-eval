@@ -186,24 +186,23 @@ def combine_box_lists(box_lists):
     matched_idx_pointer = 0
     ret = BoxList(n_boxes)
     for box_list in box_lists:
-        if len(box_list) == 0:
-            continue
-        for attr_name in BoxList.keys():
-            ret_attr = getattr(ret, attr_name)
-            box_attr = getattr(box_list, attr_name)
-            if type(ret_attr) != type(box_attr):
-                raise TypeError(f'Type mismatch for attribute `{attr_name}`. Expected `{type(ret_attr)}`, got `{type(box_attr)}`')
-            
-            if attr_name == 'matched_idx':
-                if box_list.paired_list is not None:
-                    box_attr = box_attr + matched_idx_pointer
-                else:
-                    warnings.warn('No paired BoxList defined, thus `matched_idx` cannot be properly combined.')
+        if len(box_list) != 0:
+            for attr_name in BoxList.keys():
+                ret_attr = getattr(ret, attr_name)
+                box_attr = getattr(box_list, attr_name)
+                if type(ret_attr) != type(box_attr):
+                    raise TypeError(f'Type mismatch for attribute `{attr_name}`. Expected `{type(ret_attr)}`, got `{type(box_attr)}`')
 
-            if isinstance(box_attr, (list, np.ndarray)):
-                ret_attr[pointer:pointer+len(box_list)] = box_attr
-            else:
-                raise TypeError(f'The attribute `{attr_name}` is corrupted.')
+                if attr_name == 'matched_idx':
+                    if box_list.paired_list is not None:
+                        box_attr = box_attr + matched_idx_pointer
+                    else:
+                        warnings.warn('No paired BoxList defined, thus `matched_idx` cannot be properly combined.')
+
+                if isinstance(box_attr, (list, np.ndarray)):
+                    ret_attr[pointer:pointer+len(box_list)] = box_attr
+                else:
+                    raise TypeError(f'The attribute `{attr_name}` is corrupted.')
 
         pointer += len(box_list)
         matched_idx_pointer += len(box_list.paired_list)
