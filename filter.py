@@ -2,7 +2,7 @@ import pickle
 import numpy as np
 
 __all__ = [
-    'DetectionFilter', 'ClassFilter', 'RangeFilter',
+    'DetectionFilter', 'ClassFilter', 'RangeFilter', 'ValueFilter',
     'CombinedFilter', 'build_class_filters',
     'KITTIFilter', 'build_kitti_filters'
 ]
@@ -89,9 +89,24 @@ class RangeFilter(DetectionFilter):
     
     def get_ignored_gt(self, gt):
         ignore_mask = np.isnan(gt)
-        ret = (gt < self.range[0]) | (gt > self.range[1])
+        ret = (gt < self.range[0]) | (gt >= self.range[1])
         ret[ignore_mask] = False
         return ret
+
+
+class ValueFilter(DetectionFilter):
+    def __init__(self, name, value, keep=True, *args, **kwargs):
+        super().__init__(
+            name=f'{name}:{value}', *args, **kwargs
+        )
+        self.keep = keep
+        self.value = value
+    
+    def get_ignored_gt(self, gt):
+        if self.keep:
+            return gt != self.value
+        else:
+            return gt == self.value
 
 
 class CombinedFilter(DetectionFilter):

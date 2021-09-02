@@ -1,5 +1,6 @@
 from functools import partial
 import pickle
+import multiprocessing as mp
 
 import numpy as np
 
@@ -7,6 +8,7 @@ try:
     shell = get_ipython().__class__.__name__
     if shell == 'ZMQInteractiveShell':
         from tqdm.notebook import tqdm
+        print('[detection_eval] Jupyter environment detected. Using tqdm.notebook.')
     else:
         from tqdm import tqdm
 except NameError:
@@ -72,7 +74,7 @@ class DetectionEval(Metric):
         return keys
 
     @staticmethod
-    def compute_ctable(boxes1, boxes2, criterion):
+    def compute_ctable(boxes1, boxes2, criterion, device=0):
         """ Compute matching values based on criterion between each pair of boxes from boxes1 and boxes2
 
         Args:
@@ -94,14 +96,14 @@ class DetectionEval(Metric):
             if boxes1.shape[1] == 7:
                 boxes1 = boxes1[:,[0,1,3,4,6]]
                 boxes2 = boxes2[:,[0,1,3,4,6]]
-            iou = box_iou_rotated(boxes1, boxes2, mode=criterion[:3])
+            iou = box_iou_rotated(boxes1, boxes2, mode=criterion[:3], device=device)
             if hasattr(iou, 'cpu'):
                 iou = iou.cpu().numpy()
             return iou
 
         if criterion in ['iou_3d', 'iof_3d']:
             from .box_iou_rotated import box_iou_rotated_3d
-            iou_3d = box_iou_rotated_3d(boxes1, boxes2, mode=criterion[:3])
+            iou_3d = box_iou_rotated_3d(boxes1, boxes2, mode=criterion[:3], device=device)
             if hasattr(iou_3d, 'cpu'):
                 iou_3d = iou_3d.cpu().numpy()
             return iou_3d
@@ -125,7 +127,7 @@ class DetectionEval(Metric):
 
     @classmethod
     def evaluate_one_sample(cls, gt, pred, thresholds, criterion='iou', epsilon=0.1,
-        filta=None, ctable=None, gt_processor=None, pred_processor=None):
+        filta=None, ctable=None, label_dtype=int, gt_processor=None, pred_processor=None, device=0):
         """ Evaluate one sample
 
         Args:
@@ -166,14 +168,14 @@ class DetectionEval(Metric):
             discarded_gt, discarded_pred = filtered_masks
         elif len(filtered_masks) == 3:
             ignored_gt, discarded_gt, discarded_pred = filtered_masks
-
+        
         # Compute matching scores (iou, distance, etc.) between each pair
         # of the predicted and ground truth boxes
         if ctable is None:
-            ctable = cls.compute_ctable(gt_boxes, pred_boxes, criterion)
-
-        gt_list = BoxList(len(gt_labels), label_dtype=gt_labels[0].dtype)
-        pred_list = BoxList(len(pred_labels), label_dtype=pred_labels[0].dtype)
+            ctable = cls.compute_ctable(gt_boxes, pred_boxes, criterion, device=device)
+        
+        gt_list = BoxList(len(gt_labels), label_dtype=label_dtype)
+        pred_list = BoxList(len(pred_labels), label_dtype=label_dtype)
         gt_list.pair_with(pred_list)
         
         ################################################################################ 
@@ -294,12 +296,17 @@ class DetectionEval(Metric):
     
     @classmethod
     def evaluate_all_samples(cls, gts, preds, thresholds, criterion='iou', epsilon=0.1,
-        filta=None, ctables=None, gt_processor=None, pred_processor=None, pbar=None, callback=None):
+        filta=None, ctables=None, label_dtype=int, 
+        gt_processor=None, pred_processor=None, pbar=None, callback=None, device=0):
         if not (callback is None or callable(callback)):
             raise ValueError('Callback must be callable, callback(idx, gt, pred, gt_list, pred_list)')
 
         if ctables is None:
             ctables = {}
+        
+        if pbar is True:
+            print()
+            pbar = tqdm(total=len(gts), desc=f'Evaluating detection ({filta})')
 
         gt_lists = [None] * len(gts)
         pred_lists = [None] * len(preds)
@@ -308,7 +315,7 @@ class DetectionEval(Metric):
             _, _, pred_boxes = pred_processor(pred) if callable(pred_processor) else pred
 
             if sample_idx not in ctables:
-                ctables[sample_idx] = cls.compute_ctable(gt_boxes, pred_boxes, criterion)
+                ctables[sample_idx] = cls.compute_ctable(gt_boxes, pred_boxes, criterion, device=device)
 
             gt_list_i, pred_list_i = cls.evaluate_one_sample(
                 gt=gt, pred=pred,
@@ -317,8 +324,10 @@ class DetectionEval(Metric):
                 epsilon=epsilon,
                 filta=filta,
                 ctable=ctables[sample_idx],
+                label_dtype=label_dtype,
                 gt_processor=gt_processor,
-                pred_processor=pred_processor
+                pred_processor=pred_processor,
+                device=device
             )
 
             if callable(callback):
@@ -330,6 +339,48 @@ class DetectionEval(Metric):
             if pbar is not None:
                 pbar.update()
         
+        gt_list = combine_box_lists(gt_lists)
+        pred_list = combine_box_lists(pred_lists)
+        gt_list.pair_with(pred_list)
+
+        return gt_list, pred_list
+
+
+    @classmethod
+    def evaluate_all_samples_mp(cls, gts, preds, thresholds, criterion='iou', epsilon=0.1,
+        filta=None, ctables=None, label_dtype=int, 
+        gt_processor=None, pred_processor=None, pbar=None, callback=None, processes=4):
+        import torch
+        
+        if not (callback is None or callable(callback)):
+            raise ValueError('Callback must be callable, callback(idx, gt, pred, gt_list, pred_list)')
+
+        if ctables is None:
+            ctables = {}
+
+        with mp.Pool(processes) as p:
+            args = list(zip(
+                np.array_split( np.array(gts), processes ),
+                np.array_split( np.array(preds), processes ),
+                [thresholds] * processes,
+                [criterion] * processes,
+                [epsilon] * processes,
+                [filta] * processes,
+                [None] * processes,
+                [label_dtype] * processes,
+                [gt_processor] * processes,
+                [pred_processor] * processes,
+                [None] * (processes-1) + [True],
+                [None] * processes,
+                np.arange(processes) % torch.cuda.device_count()
+            ))
+            rets = p.starmap(cls.evaluate_all_samples, args)
+            gt_lists = []
+            pred_lists = []
+            for gt_list, pred_list in rets:
+                gt_lists.append(gt_list)
+                pred_lists.append(pred_list)
+            
         gt_list = combine_box_lists(gt_lists)
         pred_list = combine_box_lists(pred_lists)
         gt_list.pair_with(pred_list)
@@ -419,8 +470,8 @@ class DetectionEval(Metric):
 
     @classmethod
     def evaluate(cls, gts, preds, thresholds, criterion='iou', epsilon=0.1,
-        filters=None, n_positions=100, metrics=None,
-        gt_processor=None, pred_processor=None, verbose=False, **kwargs):
+        filters=None, n_positions=100, metrics=None, label_dtype=int,
+        gt_processor=None, pred_processor=None, processes=-1, verbose=False, **kwargs):
         """ Evaluate all samples
 
         Args:
@@ -446,17 +497,33 @@ class DetectionEval(Metric):
         results = {}
         ctables = {}
         for filta in filters:
-            gt_list, pred_list = cls.evaluate_all_samples(
-                gts=gts, preds=preds,
-                thresholds=thresholds,
-                criterion=criterion,
-                epsilon=epsilon,
-                filta=filta,
-                ctables=ctables,
-                gt_processor=gt_processor,
-                pred_processor=pred_processor,
-                pbar=pbar
-            )
+            if processes > 0:
+                gt_list, pred_list = cls.evaluate_all_samples_mp(
+                    gts=gts, preds=preds,
+                    thresholds=thresholds,
+                    criterion=criterion,
+                    epsilon=epsilon,
+                    filta=filta,
+                    ctables=ctables,
+                    label_dtype=label_dtype,
+                    gt_processor=gt_processor,
+                    pred_processor=pred_processor,
+                    pbar=pbar,
+                    processes=processes
+                )
+            else:
+                gt_list, pred_list = cls.evaluate_all_samples(
+                    gts=gts, preds=preds,
+                    thresholds=thresholds,
+                    criterion=criterion,
+                    epsilon=epsilon,
+                    filta=filta,
+                    ctables=ctables,
+                    label_dtype=label_dtype,
+                    gt_processor=gt_processor,
+                    pred_processor=pred_processor,
+                    pbar=pbar
+                )
             stats = cls.compute_statistics(gt_list, pred_list, n_positions=n_positions)
 
             if metrics is None:

@@ -6,29 +6,31 @@ def box_iou_rotated_numba(boxes1, boxes2, mode='iou'):
     from .box_iou_rotated_numba import rotate_iou_gpu_eval
     return rotate_iou_gpu_eval(boxes1, boxes2, criterion=0 if mode == 'iof' else -1)
 
-def box_iou_rotated_torch(boxes1, boxes2, mode='iou'):
+def box_iou_rotated_torch(boxes1, boxes2, mode='iou', device=0):
     import torch
     from mmcv.ops import box_iou_rotated
+    torch.cuda.set_device(torch.device('cuda', device))
     if not isinstance(boxes1, torch.Tensor):
         boxes1 = torch.from_numpy(boxes1).float().cuda()
     if not isinstance(boxes2, torch.Tensor):
         boxes2 = torch.from_numpy(boxes2).float().cuda()
     return box_iou_rotated(boxes1, boxes2, mode=mode)
 
-def box_iou_rotated(boxes1, boxes2, mode='iou', version='torch'):
+def box_iou_rotated(boxes1, boxes2, mode='iou', version='torch', device=0):
     if version == 'numba':
         return box_iou_rotated_numba(boxes1, boxes2, mode=mode)
     if version == 'torch':
-        return box_iou_rotated_torch(boxes1, boxes2, mode=mode)
+        return box_iou_rotated_torch(boxes1, boxes2, mode=mode, device=device)
     raise ValueError(f'Unknown version {version}.')
 
 def box_iou_rotated_3d_numba(boxes1, boxes2, mode='iou', z_axis=2, z_center=0.0):
     from .box_iou_rotated_numba import d3_box_overlap
     return d3_box_overlap(boxes1, boxes2, criterion=0 if mode == 'iof' else -1, z_axis=z_axis, z_center=z_center)
 
-def box_iou_rotated_3d_new(boxes1, boxes2, mode='iou', z_axis=2, z_center=0.0, version='torch'):
+def box_iou_rotated_3d_new(boxes1, boxes2, mode='iou', z_axis=2, z_center=0.0, version='torch', device=0):
     if version == 'torch':
         import torch as alg
+        alg.cuda.set_device(alg.device('cuda', device))
         if not isinstance(boxes1, alg.Tensor):
             boxes1 = alg.from_numpy(boxes1).float().cuda()
         if not isinstance(boxes2, alg.Tensor):
@@ -78,11 +80,11 @@ def box_iou_rotated_3d_new(boxes1, boxes2, mode='iou', z_axis=2, z_center=0.0, v
     iou_3d = iou_3d.reshape((n_boxes1, n_boxes2))
     return iou_3d
 
-def box_iou_rotated_3d(boxes1, boxes2, mode='iou', z_axis=2, z_center=0.0, version='torch'):
+def box_iou_rotated_3d(boxes1, boxes2, mode='iou', z_axis=2, z_center=0.0, version='torch', device=0):
     if version == 'numba':
         return box_iou_rotated_3d_numba(boxes1, boxes2, mode=mode)
     if version == 'torch':
-        return box_iou_rotated_3d_new(boxes1, boxes2, mode=mode, z_axis=z_axis, z_center=z_center, version=version)
+        return box_iou_rotated_3d_new(boxes1, boxes2, mode=mode, z_axis=z_axis, z_center=z_center, version=version, device=device)
     if version[-3:] == 'new':
-        return box_iou_rotated_3d_new(boxes1, boxes2, mode=mode, z_axis=z_axis, z_center=z_center, version=version[:-4])
+        return box_iou_rotated_3d_new(boxes1, boxes2, mode=mode, z_axis=z_axis, z_center=z_center, version=version[:-4], device=device)
     raise ValueError(f'Unknown version {version}.')
